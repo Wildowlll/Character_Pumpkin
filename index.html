@@ -69,13 +69,19 @@
         <h2>1. 도안 넣기</h2>
         <label class="drop" id="drop">
           <input type="file" id="file" accept="image/*" multiple hidden>
-          <span>클릭하거나 이미지를 끌어다 놓기<br><small>배경 투명 PNG 추천 · 최대 3명 · Ctrl+V 붙여넣기 가능</small></span>
+          <span>클릭하거나 이미지를 끌어다 놓기<br><small>배경 투명 PNG 추천 · 최대 4명 · Ctrl+V 붙여넣기 가능</small></span>
         </label>
         <div class="thumbs" id="thumbs"></div>
       </section>
 
       <section class="card">
         <h2>2. 조각 설정</h2>
+        <div class="row">새기기
+          <div class="seg">
+            <label><input type="radio" name="group" value="pair" data-k="group" checked><span>둘이 한 호박에</span></label>
+            <label><input type="radio" name="group" value="solo" data-k="group"><span>한 명씩</span></label>
+          </div>
+        </div>
         <div class="row">조각 방식
           <div class="seg">
             <label><input type="radio" name="style" value="fill" data-k="style" checked><span>면 파기</span></label>
@@ -147,7 +153,7 @@ const rgba = (a, al = 1) => `rgba(${a[0]},${a[1]},${a[2]},${al})`;
 const FONT = '"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif';
 
 /* ===================== 상태 ===================== */
-const S = { chars: [], style: 'fill', flame: 'gold', skin: 'orange', caption: 'Happy Halloween', sound: true };
+const S = { chars: [], group: 'pair', style: 'fill', flame: 'gold', skin: 'orange', caption: 'Happy Halloween', sound: true };
 const FLAMES = {
   gold:   { core: hex('#fff4c2'), mid: hex('#ffb547'), edge: hex('#ff7417') },
   violet: { core: hex('#f6e4ff'), mid: hex('#c27cff'), edge: hex('#7b2cff') },
@@ -357,15 +363,39 @@ function pumpkinSprites(pw, ph, skinKey) {
 }
 
 /* ===================== 배치 ===================== */
-function layout(n) {
-  if (n <= 1) return [{ x: 250, pw: 290, ph: 240 }];
-  if (n === 2) return [{ x: 150, pw: 220, ph: 185 }, { x: 355, pw: 232, ph: 195 }];
-  return [{ x: 95, pw: 165, ph: 140 }, { x: 250, pw: 212, ph: 180 }, { x: 405, pw: 165, ph: 140 }];
+function groupsOf(list) {
+  if (S.group === 'solo') return list.map(c => [c]);
+  const g = [];
+  for (let i = 0; i < list.length; i += 2) g.push(list.slice(i, i + 2));
+  return g;
 }
-function faceRect(pw, ph, spr) {
-  const bw = pw * 0.62, bh = ph * 0.56, k = Math.min(bw / spr.width, bh / spr.height);
-  const w = spr.width * k, h = spr.height * k;
-  return { x: -w / 2, y: -ph * 0.47 - h / 2, w, h };
+function layout(groups) {
+  const n = groups.length;
+  let L;
+  if (n <= 1) L = [{ x: 250, pw: 290, ph: 240 }];
+  else if (n === 2) L = [{ x: 140, pw: 220, ph: 185 }, { x: 362, pw: 232, ph: 195 }];
+  else if (n === 3) L = [{ x: 95, pw: 165, ph: 140 }, { x: 250, pw: 212, ph: 180 }, { x: 405, pw: 165, ph: 140 }];
+  else L = [{ x: 70, pw: 128, ph: 112 }, { x: 190, pw: 140, ph: 124 }, { x: 312, pw: 140, ph: 124 }, { x: 432, pw: 128, ph: 112 }];
+  return L.map((l, i) => (groups[i] && groups[i].length > 1) ? { ...l, pw: Math.min(l.pw * (n === 1 ? 1.15 : 1.12), 340) } : l);
+}
+// 도안 칸: 1명이면 가운데 하나, 2명이면 좌우로 나란히
+function faceRects(pw, ph, sprs) {
+  const cy = -ph * 0.47;
+  if (sprs.length <= 1) {
+    const spr = sprs[0], bw = pw * 0.62, bh = ph * 0.56, k = Math.min(bw / spr.width, bh / spr.height);
+    const w = spr.width * k, h = spr.height * k;
+    const r = { x: -w / 2, y: cy - h / 2, w, h };
+    return { rects: [r], box: r };
+  }
+  const bw = pw * 0.72, bh = ph * 0.5, gap = pw * 0.03, half = (bw - gap) / 2;
+  const rects = sprs.map((spr, i) => {
+    const k = Math.min(half / spr.width, bh / spr.height), w = spr.width * k, h = spr.height * k;
+    const cx = (i === 0 ? -1 : 1) * (gap / 2 + half / 2);
+    return { x: cx - w / 2, y: cy - h / 2, w, h };
+  });
+  const x0 = Math.min(...rects.map(r => r.x)), y0 = Math.min(...rects.map(r => r.y));
+  const x1 = Math.max(...rects.map(r => r.x + r.w)), y1 = Math.max(...rects.map(r => r.y + r.h));
+  return { rects, box: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } };
 }
 function carveProgress(t) { return pr(t, T.carve); }
 function knifeLocal(c, fr) {
@@ -487,8 +517,8 @@ function candle(c, x, y, s, t, F) {
 }
 
 /* ===================== 장면 ===================== */
-const layers = [mk(10, 10), mk(10, 10), mk(10, 10)];
-function drawPumpkin(c, i, L, ch, t, glow, F) {
+const layers = [mk(10, 10), mk(10, 10), mk(10, 10), mk(10, 10)];
+function drawPumpkin(c, i, L, group, t, glow, F) {
   const { x, pw, ph } = L;
   const sp = pumpkinSprites(pw, ph, S.skin);
   const lay = layers[i];
@@ -499,15 +529,16 @@ function drawPumpkin(c, i, L, ch, t, glow, F) {
   lx.drawImage(lid.off ? sp.open : sp.body, 0, 0);
   lx.translate(sp.ox, sp.oy);
   const prog = carveProgress(t);
-  let car = null, fr = null;
-  if (ch) {
-    car = buildCarve(ch);
-    fr = faceRect(pw, ph, car.unlit);
+  const has = group && group.length > 0;
+  let cars = [], rects = [], fr = null;
+  if (has) {
+    cars = group.map(buildCarve);
+    ({ rects, box: fr } = faceRects(pw, ph, cars.map(cc => cc.unlit)));
     if (prog > 0) {
       lx.save();
       lx.beginPath(); lx.ellipse(0, -ph * 0.5, pw * 0.44, ph * 0.43, 0, 0, TAU); lx.clip();
       revealClip(lx, null, fr, prog); lx.clip();
-      lx.drawImage(car.unlit, fr.x, fr.y, fr.w, fr.h);
+      cars.forEach((car, j) => lx.drawImage(car.unlit, rects[j].x, rects[j].y, rects[j].w, rects[j].h));
       lx.restore();
     }
   }
@@ -529,21 +560,24 @@ function drawPumpkin(c, i, L, ch, t, glow, F) {
   if (glow > 0) { lx.fillStyle = rgba(F.edge, 0.12 * glow); lx.fillRect(0, 0, lay.width, lay.height); }
   lx.restore();
   // 빛나는 조각
-  if (car && glow > 0) {
+  if (has && glow > 0) {
     lx.save();
     lx.beginPath(); lx.ellipse(0, -ph * 0.5, pw * 0.44, ph * 0.43, 0, 0, TAU); lx.clip();
-    lx.globalAlpha = glow; lx.drawImage(car.lit, fr.x, fr.y, fr.w, fr.h);
+    lx.globalAlpha = glow;
+    cars.forEach((car, j) => lx.drawImage(car.lit, rects[j].x, rects[j].y, rects[j].w, rects[j].h));
     lx.restore();
   }
   c.fillStyle = 'rgba(5,3,12,0.55)';
   c.beginPath(); c.ellipse(x, GROUND - 2, pw * 0.48, Math.max(5, ph * 0.04), 0, 0, TAU); c.fill();
   c.drawImage(lay, x - sp.ox, GROUND - sp.oy);
   // 블룸
-  if (car && glow > 0) {
+  if (has && glow > 0) {
     c.save(); c.globalCompositeOperation = 'lighter'; c.globalAlpha = 0.75 * glow;
     c.translate(x, GROUND);
-    const bk = fr.w / car.lit.width, bp = car.BP * bk;
-    c.drawImage(car.bloom, fr.x - bp, fr.y - bp, fr.w + bp * 2, fr.h + bp * 2);
+    cars.forEach((car, j) => {
+      const r = rects[j], bk = r.w / car.lit.width, bp = car.BP * bk;
+      c.drawImage(car.bloom, r.x - bp, r.y - bp, r.w + bp * 2, r.h + bp * 2);
+    });
     c.restore();
   }
   // 초 넣기
@@ -561,7 +595,7 @@ function drawPumpkin(c, i, L, ch, t, glow, F) {
     c.restore();
   }
   // 칼
-  if (ch && prog > 0 && prog < 1) {
+  if (has && prog > 0 && prog < 1) {
     const k = knifeLocal(prog, fr);
     knife(c, x + k.x, GROUND + k.y, pw / 240, t);
   }
@@ -570,10 +604,10 @@ function drawPumpkin(c, i, L, ch, t, glow, F) {
 
 function drawScene(c, t) {
   const list = S.chars.length ? S.chars : (DEF ? [DEF] : []);
-  const n = Math.max(1, list.length), F = FLAMES[S.flame], glow = glowAt(t);
+  const groups = list.length ? groupsOf(list) : [[]], F = FLAMES[S.flame], glow = glowAt(t);
   drawSky(c, t);
   drawGround(c, glow, F);
-  const lay = layout(n), origins = [];
+  const lay = layout(groups), origins = [];
   // 호박 뒤 후광
   if (glow > 0) {
     c.save(); c.globalCompositeOperation = 'lighter';
@@ -586,8 +620,8 @@ function drawScene(c, t) {
     c.restore();
   }
   lay.forEach((L, i) => {
-    const o = drawPumpkin(c, i, L, list[i] || null, t, glow, F);
-    if (list[i]) origins.push(o);
+    const o = drawPumpkin(c, i, L, groups[i], t, glow, F);
+    if (groups[i] && groups[i].length) origins.push(o);
   });
   chunks(c, t, origins);
   drawBats(c, t);
@@ -679,15 +713,15 @@ function renderThumbs() {
 }
 function addFiles(files) {
   const imgs = [...files].filter(f => f.type && f.type.startsWith('image/'));
-  const room = 3 - S.chars.length;
-  if (room <= 0) { setStatus('호박은 최대 3개까지만 놓을 수 있어요.'); return; }
+  const room = 4 - S.chars.length;
+  if (room <= 0) { setStatus('도안은 최대 4명까지 넣을 수 있어요.'); return; }
   imgs.slice(0, room).forEach(f => {
     const url = URL.createObjectURL(f), img = new Image();
     img.onload = () => { S.chars.push(makeChar(img)); renderThumbs(); URL.revokeObjectURL(url); };
     img.onerror = () => setStatus('이미지를 읽지 못했어요.');
     img.src = url;
   });
-  if (imgs.length > room) setStatus('호박은 최대 3개까지만 놓을 수 있어요.');
+  if (imgs.length > room) setStatus('도안은 최대 4명까지 넣을 수 있어요.');
 }
 document.getElementById('file').addEventListener('change', e => { addFiles(e.target.files); e.target.value = ''; });
 const stage = document.getElementById('stage'), drop = document.getElementById('drop');
