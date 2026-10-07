@@ -42,6 +42,7 @@
   .seg input{position:absolute;opacity:0;pointer-events:none}
   .seg span{display:block;padding:5px 10px;border-radius:8px;font-size:13px;cursor:pointer;white-space:nowrap}
   .seg input:checked+span{background:var(--soft);box-shadow:0 1px 3px rgba(0,0,0,.3);font-weight:700}
+  input[type=range]{width:150px;accent-color:var(--accent)}
   .check{display:flex;align-items:center;gap:8px;font-size:14px;margin:8px 0;cursor:pointer}
   .check input{accent-color:var(--accent);width:16px;height:16px}
   button.primary{width:100%;border:0;border-radius:12px;padding:13px;font-size:16px;font-weight:700;
@@ -101,6 +102,8 @@
             <label><input type="radio" name="skin" value="white" data-k="skin"><span>하양</span></label>
           </div>
         </div>
+        <div class="row">도안 크기 <input type="range" min="0.8" max="1.3" step="0.05" value="1" data-k="size"></div>
+        <div class="row">빛 번짐 <input type="range" min="0" max="1" step="0.05" value="0.4" data-k="bloom"></div>
         <div class="row">문구 <input type="text" data-k="caption" value="Happy Halloween" maxlength="20"></div>
         <label class="check"><input type="checkbox" data-k="sound" checked>🔔 효과음</label>
       </section>
@@ -153,7 +156,7 @@ const rgba = (a, al = 1) => `rgba(${a[0]},${a[1]},${a[2]},${al})`;
 const FONT = '"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif';
 
 /* ===================== 상태 ===================== */
-const S = { chars: [], group: 'pair', style: 'fill', flame: 'gold', skin: 'orange', caption: 'Happy Halloween', sound: true };
+const S = { chars: [], group: 'pair', size: 1, bloom: 0.4, style: 'fill', flame: 'gold', skin: 'orange', caption: 'Happy Halloween', sound: true };
 const FLAMES = {
   gold:   { core: hex('#fff4c2'), mid: hex('#ffb547'), edge: hex('#ff7417') },
   violet: { core: hex('#f6e4ff'), mid: hex('#c27cff'), edge: hex('#7b2cff') },
@@ -163,7 +166,7 @@ const SKINS = {
   orange: { base: '#ff9b3d', shade: '#e8701f', crease: '#d4621a', out: '#5a2a12', hi: 'rgba(255,244,214,0.75)', stem: '#8a8a3c' },
   white:  { base: '#fbf5e6', shade: '#e0d3b4', crease: '#c9ba94', out: '#5b4a35', hi: 'rgba(255,255,255,0.9)',   stem: '#8a8a3c' },
 };
-const FLESH = hex('#f2b45c'), HOLE = hex('#1c0c04');
+const FLESH = hex('#f2b45c'), HOLE = hex('#1c0c04'), BRIDGE = hex('#3d1a08');
 
 /* ===================== 타임라인 ===================== */
 const T = {
@@ -213,15 +216,28 @@ function blurred(M, f) {
   bx.imageSmoothingQuality = 'high'; bx.drawImage(s, 0, 0, b.width, b.height);
   return b;
 }
-// g = 0(껍질 그대로) ~ 1(완전히 뚫림)
+// g = 0(껍질 그대로) ~ 1(완전히 뚫림), a = 도안 영역
 function carveMap(ch, style) {
   const { src, opaque } = ch, w = src.width, h = src.height;
   const d = src.getContext('2d').getImageData(0, 0, w, h).data;
-  const g = new Float32Array(w * h);
-  const mode = opaque ? 'line' : style;
+  const g = new Float32Array(w * h), A = new Float32Array(w * h), Ls = new Float32Array(w * h);
+  const hist = new Uint32Array(101); let cnt = 0;
   for (let i = 0; i < w * h; i++) {
     const a = d[i * 4 + 3] / 255, L = (0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]) / 255;
-    g[i] = mode === 'fill' ? a * Math.pow(L, 0.8) : a * clamp((1 - L - 0.1) / 0.9, 0, 1);
+    A[i] = a; Ls[i] = L;
+    if (a > 0.5) { hist[Math.round(L * 100)]++; cnt++; }
+  }
+  // 명암 자동 늘리기 (하위 4% ~ 상위 4%)
+  let lo = 0, hi = 1;
+  if (cnt > 50) {
+    let acc = 0; for (let k = 0; k <= 100; k++) { acc += hist[k]; if (acc >= cnt * 0.04) { lo = k / 100; break; } }
+    acc = 0; for (let k = 100; k >= 0; k--) { acc += hist[k]; if (acc >= cnt * 0.04) { hi = k / 100; break; } }
+    if (hi - lo < 0.25) { lo = 0; hi = 1; }
+  }
+  const mode = opaque ? 'line' : style;
+  for (let i = 0; i < w * h; i++) {
+    const L = clamp((Ls[i] - lo) / (hi - lo), 0, 1);
+    g[i] = mode === 'fill' ? A[i] * Math.pow(L, 1.1) : A[i] * clamp((1 - L - 0.1) / 0.9, 0, 1);
   }
   if (mode === 'line') {   // 선을 조금 굵게 (칼로 팔 수 있는 굵기)
     const o = new Float32Array(w * h);
@@ -233,14 +249,14 @@ function carveMap(ch, style) {
       }
       o[y * w + x] = m;
     }
-    return o;
+    return { g: o, A };
   }
-  return g;
+  return { g, A };
 }
 function buildCarve(ch) {
   const key = S.style + '|' + S.flame;
   if (ch.cache[key]) return ch.cache[key];
-  const w = ch.src.width, h = ch.src.height, g = carveMap(ch, S.style), F = FLAMES[S.flame];
+  const w = ch.src.width, h = ch.src.height, { g, A } = carveMap(ch, S.style), F = FLAMES[S.flame];
   const unlit = mk(w, h), lit = mk(w, h);
   const ux = unlit.getContext('2d'), lx = lit.getContext('2d');
   const ud = ux.createImageData(w, h), ld = lx.createImageData(w, h);
@@ -250,14 +266,18 @@ function buildCarve(ch) {
     const uc = mixc(FLESH, HOLE, hole);
     ud.data[j] = uc[0]; ud.data[j + 1] = uc[1]; ud.data[j + 2] = uc[2];
     ud.data[j + 3] = 255 * Math.max(shave * 0.85, hole);
-    const tt = smooth(0.12, 1, v);
-    const lc = tt < 0.5 ? mixc(F.edge, F.mid, tt * 2) : mixc(F.mid, F.core, (tt - 0.5) * 2);
+    const tt = smooth(0.12, 1, v), on = smooth(0.1, 0.4, v);
+    const gc = tt < 0.5 ? mixc(F.edge, F.mid, tt * 2) : mixc(F.mid, F.core, (tt - 0.5) * 2);
+    const lc = mixc(BRIDGE, gc, on);   // 안 파인 부분은 어둡게
     ld.data[j] = lc[0]; ld.data[j + 1] = lc[1]; ld.data[j + 2] = lc[2];
-    ld.data[j + 3] = 255 * smooth(0.1, 0.4, v);
+    ld.data[j + 3] = 255 * Math.max(on, A[i] * 0.92);
   }
   ux.putImageData(ud, 0, 0); lx.putImageData(ld, 0, 0);
+  const glowOnly = mk(w, h), gx = glowOnly.getContext('2d'), gd = gx.createImageData(w, h);
+  for (let i = 0; i < w * h * 4; i += 4) { gd.data[i] = ld.data[i]; gd.data[i + 1] = ld.data[i + 1]; gd.data[i + 2] = ld.data[i + 2]; gd.data[i + 3] = 255 * smooth(0.1, 0.4, g[i / 4]); }
+  gx.putImageData(gd, 0, 0);
   const BP = 36, padded = mk(w + BP * 2, h + BP * 2);
-  padded.getContext('2d').drawImage(lit, BP, BP);
+  padded.getContext('2d').drawImage(glowOnly, BP, BP);
   const bloom = blurred(blurred(padded, 5), 3);
   return (ch.cache[key] = { unlit, lit, bloom, BP });
 }
@@ -382,12 +402,12 @@ function layout(groups) {
 function faceRects(pw, ph, sprs) {
   const cy = -ph * 0.47;
   if (sprs.length <= 1) {
-    const spr = sprs[0], bw = pw * 0.62, bh = ph * 0.56, k = Math.min(bw / spr.width, bh / spr.height);
+    const z = S.size, spr = sprs[0], bw = pw * 0.66 * z, bh = ph * 0.6 * z, k = Math.min(bw / spr.width, bh / spr.height);
     const w = spr.width * k, h = spr.height * k;
     const r = { x: -w / 2, y: cy - h / 2, w, h };
     return { rects: [r], box: r };
   }
-  const bw = pw * 0.72, bh = ph * 0.5, gap = pw * 0.03, half = (bw - gap) / 2;
+  const z = S.size, bw = pw * 0.76 * z, bh = ph * 0.54 * z, gap = pw * 0.03, half = (bw - gap) / 2;
   const rects = sprs.map((spr, i) => {
     const k = Math.min(half / spr.width, bh / spr.height), w = spr.width * k, h = spr.height * k;
     const cx = (i === 0 ? -1 : 1) * (gap / 2 + half / 2);
@@ -536,7 +556,7 @@ function drawPumpkin(c, i, L, group, t, glow, F) {
     ({ rects, box: fr } = faceRects(pw, ph, cars.map(cc => cc.unlit)));
     if (prog > 0) {
       lx.save();
-      lx.beginPath(); lx.ellipse(0, -ph * 0.5, pw * 0.44, ph * 0.43, 0, 0, TAU); lx.clip();
+      lx.beginPath(); lx.ellipse(0, -ph * 0.5, pw * 0.46, ph * 0.45, 0, 0, TAU); lx.clip();
       revealClip(lx, null, fr, prog); lx.clip();
       cars.forEach((car, j) => lx.drawImage(car.unlit, rects[j].x, rects[j].y, rects[j].w, rects[j].h));
       lx.restore();
@@ -562,7 +582,7 @@ function drawPumpkin(c, i, L, group, t, glow, F) {
   // 빛나는 조각
   if (has && glow > 0) {
     lx.save();
-    lx.beginPath(); lx.ellipse(0, -ph * 0.5, pw * 0.44, ph * 0.43, 0, 0, TAU); lx.clip();
+    lx.beginPath(); lx.ellipse(0, -ph * 0.5, pw * 0.46, ph * 0.45, 0, 0, TAU); lx.clip();
     lx.globalAlpha = glow;
     cars.forEach((car, j) => lx.drawImage(car.lit, rects[j].x, rects[j].y, rects[j].w, rects[j].h));
     lx.restore();
@@ -572,12 +592,16 @@ function drawPumpkin(c, i, L, group, t, glow, F) {
   c.drawImage(lay, x - sp.ox, GROUND - sp.oy);
   // 블룸
   if (has && glow > 0) {
-    c.save(); c.globalCompositeOperation = 'lighter'; c.globalAlpha = 0.75 * glow;
+    c.save(); c.globalCompositeOperation = 'lighter';
     c.translate(x, GROUND);
-    cars.forEach((car, j) => {
-      const r = rects[j], bk = r.w / car.lit.width, bp = car.BP * bk;
-      c.drawImage(car.bloom, r.x - bp, r.y - bp, r.w + bp * 2, r.h + bp * 2);
-    });
+    let ba = 1.6 * S.bloom * glow;
+    while (ba > 0.01) {
+      c.globalAlpha = Math.min(1, ba); ba -= 1;
+      cars.forEach((car, j) => {
+        const r = rects[j], bk = r.w / car.lit.width, bp = car.BP * bk;
+        c.drawImage(car.bloom, r.x - bp, r.y - bp, r.w + bp * 2, r.h + bp * 2);
+      });
+    }
     c.restore();
   }
   // 초 넣기
@@ -693,7 +717,7 @@ document.querySelectorAll('[data-k]').forEach(el => {
   el.addEventListener('input', () => {
     if (el.type === 'radio' && !el.checked) return;
     const k = el.dataset.k;
-    S[k] = el.type === 'checkbox' ? el.checked : el.value;
+    S[k] = el.type === 'checkbox' ? el.checked : el.type === 'range' ? parseFloat(el.value) : el.value;
     if (k === 'style' || k === 'flame') renderThumbs();
   });
 });
