@@ -112,11 +112,13 @@
         <button class="primary" id="start">🔪 조각 시작</button>
         <div class="row" style="margin-top:12px">
           <select id="gifsize">
+            <option value="1" selected>GIF 원본 (500px)</option>
             <option value="0.72">GIF 보통 (360px)</option>
             <option value="0.54">GIF 작게 (270px)</option>
           </select>
           <button class="secondary" id="gif">GIF로 저장</button>
         </div>
+        <label class="check" style="font-size:13px"><input type="checkbox" id="dither">그라데이션 부드럽게 (용량 약 2배)</label>
         <p id="status"></p>
         <img id="preview" alt="" hidden>
       </section>
@@ -777,7 +779,7 @@ gifBtn.addEventListener('click', async () => {
     const scale = parseFloat(document.getElementById('gifsize').value);
     const gw = Math.round(W * scale), gh = Math.round(H * scale);
     const oc = mk(gw, gh), ox = oc.getContext('2d');
-    const gif = new GIF({ workers: 2, quality: 10, width: gw, height: gh, workerScript: workerURL });
+    const gif = new GIF({ workers: 2, quality: 1, width: gw, height: gh, workerScript: workerURL, dither: document.getElementById('dither').checked ? 'FloydSteinberg' : false });
     const fps = 15, nF = Math.ceil(T.total * fps);
     for (let f = 0; f <= nF; f++) {
       const t = Math.min(f / fps, T.total);
@@ -792,7 +794,8 @@ gifBtn.addEventListener('click', async () => {
       const a = document.createElement('a');
       a.href = url; a.download = `character_pumpkin_${Date.now()}.gif`; a.click();
       const pv = document.getElementById('preview'); pv.src = url; pv.hidden = false;
-      setStatus(`완료! ${(blob.size / 1024 / 1024).toFixed(1)}MB`);
+      const mb = blob.size / 1024 / 1024;
+      setStatus(`완료! ${mb.toFixed(1)}MB` + (mb > 5 ? ' · 트위터 모바일 앱은 GIF 5MB 제한이 있어요. PC 웹에서 올리거나(15MB까지) 더 작은 크기로 저장해 주세요.' : ''));
       gifBtn.disabled = false;
     });
     gif.render();
